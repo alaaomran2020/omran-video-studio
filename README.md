@@ -26,3 +26,16 @@ go run ./cmd/render -image assets/product.jpg -watermark assets/omran-watermark.
 - لغة مصرية وهوية عمران الصحيحة.
 - مراجعة بشرية قبل نشر أي ادعاء أو سعر.
 - لا تُحفظ ملفات الفيديو الكبيرة داخل Git.
+
+
+## تعدد المشاهد وBatch Automation
+
+انسخ `examples/batch.json` وعدّل الصور والمدد والنصوص، ثم شغّل:
+
+```bash
+go run ./cmd/batch -input examples/batch.json
+```
+
+كل مشروع يدعم حتى 20 مشهدًا وإجمالي 5 دقائق، مع صوت وعلامة مائية اختياريين.
+القوالب المتاحة: `classic` و`warm` و`catalog`. يُنشأ ملف SRT بجوار
+كل MP4 ويُحرق النص داخل الفيديو تلقائيًا.
