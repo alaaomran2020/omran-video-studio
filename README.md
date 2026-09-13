@@ -9,7 +9,15 @@ go test ./...
 go run ./cmd/studio
 ```
 
-افتح `http://localhost:8080`. الرندر يعتمد على FFmpeg عند إضافته للمرحلة التالية.
+افتح `http://localhost:8080`.
+
+## تصدير فيديو رأسي
+
+```bash
+go run ./cmd/render -image assets/product.jpg -watermark assets/omran-watermark.png -seconds 20 -output output/video.mp4
+```
+
+الصوت اختياري عبر `-audio`. التصدير: MP4 H.264، مقاس 1080×1920، و30fps.
 
 ## المبادئ
 
@@ -17,3 +25,4 @@ go run ./cmd/studio
 - Local-first ومن دون API أو Secrets.
 - لغة مصرية وهوية عمران الصحيحة.
 - مراجعة بشرية قبل نشر أي ادعاء أو سعر.
+- لا تُحفظ ملفات الفيديو الكبيرة داخل Git.
