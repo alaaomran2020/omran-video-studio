@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>استوديو فيديو عمران</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main>
+  <header><b>OMRAN TOYS</b><h1>استوديو صناعة فيديوهات عمران</h1><p>سكربتات UGC مصرية واضحة وطبيعية.</p></header>
+  <form id="generator">
+    <label>اسم المنتج<input name="name" required placeholder="مثال: عربية ريموت"></label>
+    <label>الفائدة الأساسية<input name="benefit" required placeholder="ميزة مؤكدة يمكن تصويرها"></label>
+    <label>القسم<input name="category" placeholder="عربيات، عرايس، ألعاب تعليمية"></label>
+    <label>الجمهور<input name="audience" placeholder="أهالي، هدايا، تجار"></label>
+    <label>مدة الفيديو<select name="duration_seconds"><option>15</option><option selected>20</option><option>30</option></select></label>
+    <label>نداء الإجراء<input name="cta" placeholder="اتواصل معانا على واتساب"></label>
+    <button>إنشاء السكربت</button>
+  </form>
+  <p id="status" role="status"></p>
+  <section id="result" hidden>
+    <h2>الخطاف المقترح</h2><p id="hook"></p>
+    <div class="table"><table><thead><tr><th>الثانية</th><th>اللقطة</th><th>التعليق الصوتي</th><th>النص</th></tr></thead><tbody></tbody></table></div>
+    <h2>الكابشن</h2><p id="caption"></p>
+    <h2>الهاشتاقات</h2><p id="hashtags"></p>
+    <button id="download" type="button">تحميل المشروع JSON</button>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

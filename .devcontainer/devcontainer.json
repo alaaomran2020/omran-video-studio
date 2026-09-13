@@ -1,0 +1,8 @@
+{
+  "name": "Omran Video Studio",
+  "image": "mcr.microsoft.com/devcontainers/go:1-1.22-bookworm",
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8080": {"label": "Omran Video Studio", "onAutoForward": "openPreview"}
+  }
+}

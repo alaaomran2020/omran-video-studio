@@ -1,0 +1,7 @@
+output/
+tmp/
+.env
+*.mp4
+*.mov
+*.wav
+*.mp3
