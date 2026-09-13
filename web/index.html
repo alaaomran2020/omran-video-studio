@@ -26,6 +26,20 @@
     <h2>الهاشتاقات</h2><p id="hashtags"></p>
     <button id="download" type="button">تحميل المشروع JSON</button>
   </section>
+  <section class="renderer">
+    <h2>تصدير فيديو رأسي</h2>
+    <p>ارفع صورة المنتج، ويمكن إضافة صوت وعلامة مائية PNG. الحد الأقصى 80MB.</p>
+    <form id="renderer">
+      <label>صورة المنتج<input type="file" name="image" accept=".jpg,.jpeg,.png,.webp" required></label>
+      <label>الصوت — اختياري<input type="file" name="audio" accept=".wav,.mp3,.m4a,.aac"></label>
+      <label>Watermark — اختياري<input type="file" name="watermark" accept=".png,.webp"></label>
+      <label>المدة<input type="number" name="seconds" min="1" max="60" value="20" required></label>
+      <button>تصدير MP4</button>
+    </form>
+    <p id="render-status" role="status"></p>
+    <video id="preview" controls hidden></video>
+    <a id="video-download" class="download" hidden>تحميل الفيديو</a>
+  </section>
 </main>
 <script src="app.js"></script>
 </body>
