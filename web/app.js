@@ -121,7 +121,24 @@ batchForm.addEventListener("submit",async e=>{
   }catch(err){batchStatus.textContent=err.message}
 });
 
-const statusNames={queued:"في الانتظار",running:"جاري التصدير",done:"اكتملت",failed:"فشلت"};
+const statusNames={queued:"في الانتظار",running:"جاري التصدير",cancelling:"جاري الإلغاء",cancelled:"ملغاة",done:"اكتملت",failed:"فشلت"};
+async function jobAction(id,action){
+  try{
+    const res=await fetch(`/api/jobs/${id}/${action}`,{method:"POST"});
+    if(!res.ok)throw new Error(await res.text());
+    await loadJobs();
+  }catch(err){alert(err.message)}
+}
+
+function actionButton(text,className,handler){
+  const button=document.createElement("button");
+  button.type="button";
+  button.textContent=text;
+  button.className=className;
+  button.addEventListener("click",handler);
+  return button;
+}
+
 function jobCard(task){
   const card=document.createElement("article");
   card.className=`job-card job-${task.status}`;
@@ -132,13 +149,18 @@ function jobCard(task){
   const meta=document.createElement("small");meta.textContent=new Date(task.created_at).toLocaleString("ar-EG");
   card.append(top,meta);
   if(task.error){const error=document.createElement("p");error.className="error";error.textContent=task.error;card.append(error)}
+  const actions=document.createElement("div");actions.className="job-actions";
   if(task.output_url){
-    const actions=document.createElement("div");actions.className="job-actions";
-    const video=document.createElement("a");video.href=task.output_url;video.download="";video.textContent="تحميل MP4";
-    actions.append(video);
+    const video=document.createElement("a");video.href=task.output_url;video.download="";video.textContent="تحميل MP4";actions.append(video);
     if(task.srt_url){const srt=document.createElement("a");srt.href=task.srt_url;srt.download="";srt.textContent="تحميل SRT";actions.append(srt)}
-    card.append(actions);
   }
+  if(["queued","running"].includes(task.status)){
+    actions.append(actionButton("إلغاء المهمة","danger",()=>jobAction(task.id,"cancel")));
+  }
+  if(["failed","cancelled"].includes(task.status)){
+    actions.append(actionButton("إعادة المحاولة","secondary",()=>jobAction(task.id,"retry")));
+  }
+  if(actions.children.length)card.append(actions);
   return card;
 }
 

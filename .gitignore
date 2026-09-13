@@ -5,3 +5,5 @@ tmp/
 *.mov
 *.wav
 *.mp3
+
+data/

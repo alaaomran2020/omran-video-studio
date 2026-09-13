@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -34,35 +35,171 @@ type job struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-type jobStore struct {
-	mu    sync.RWMutex
-	items map[string]job
+type jobRecord struct {
+	Job       job              `json:"job"`
+	Project   pipeline.Project `json:"project"`
+	UploadDir string           `json:"upload_dir"`
+	cancel    context.CancelFunc
 }
 
-var jobs = jobStore{items: make(map[string]job)}
+type jobStore struct {
+	mu    sync.RWMutex
+	path  string
+	items map[string]*jobRecord
+}
 
-func (s *jobStore) put(j job) {
+func newJobStore(path string) *jobStore {
+	s := &jobStore{path: path, items: make(map[string]*jobRecord)}
+	data, err := os.ReadFile(path)
+	if err == nil {
+		var records []*jobRecord
+		if json.Unmarshal(data, &records) == nil {
+			for _, record := range records {
+				if record != nil && record.Job.ID != "" {
+					s.items[record.Job.ID] = record
+				}
+			}
+		}
+	}
+	return s
+}
+
+var jobs = newJobStore(filepath.Join("data", "jobs.json"))
+
+func (s *jobStore) persistLocked() error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
+		return err
+	}
+	records := make([]*jobRecord, 0, len(s.items))
+	for _, record := range s.items {
+		copyRecord := *record
+		copyRecord.cancel = nil
+		records = append(records, &copyRecord)
+	}
+	sort.Slice(records, func(i, k int) bool { return records[i].Job.CreatedAt.Before(records[k].Job.CreatedAt) })
+	data, err := json.MarshalIndent(records, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.path)
+}
+
+func (s *jobStore) put(record *jobRecord) error {
 	s.mu.Lock()
-	s.items[j.ID] = j
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	s.items[record.Job.ID] = record
+	return s.persistLocked()
 }
 
 func (s *jobStore) update(id, status, outputURL, srtURL, message string) {
 	s.mu.Lock()
-	j := s.items[id]
-	j.Status, j.OutputURL, j.SRTURL, j.Error, j.UpdatedAt = status, outputURL, srtURL, message, time.Now()
-	s.items[id] = j
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	record, ok := s.items[id]
+	if !ok {
+		return
+	}
+	record.Job.Status, record.Job.OutputURL, record.Job.SRTURL = status, outputURL, srtURL
+	record.Job.Error, record.Job.UpdatedAt = message, time.Now()
+	if err := s.persistLocked(); err != nil {
+		log.Printf("persist job %s: %v", id, err)
+	}
 }
 
 func (s *jobStore) list() []job {
 	s.mu.RLock()
 	out := make([]job, 0, len(s.items))
-	for _, j := range s.items {
-		out = append(out, j)
+	for _, record := range s.items {
+		out = append(out, record.Job)
 	}
 	s.mu.RUnlock()
 	sort.Slice(out, func(i, k int) bool { return out[i].CreatedAt.After(out[k].CreatedAt) })
+	return out
+}
+
+func (s *jobStore) setCancel(id string, cancel context.CancelFunc) {
+	s.mu.Lock()
+	if record, ok := s.items[id]; ok {
+		record.cancel = cancel
+	}
+	s.mu.Unlock()
+}
+
+func (s *jobStore) clearCancel(id string) {
+	s.mu.Lock()
+	if record, ok := s.items[id]; ok {
+		record.cancel = nil
+	}
+	s.mu.Unlock()
+}
+
+func (s *jobStore) cancelJob(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.items[id]
+	if !ok {
+		return os.ErrNotExist
+	}
+	if record.Job.Status != "queued" && record.Job.Status != "running" {
+		return errors.New("لا يمكن إلغاء هذه المهمة")
+	}
+	record.Job.Status, record.Job.UpdatedAt = "cancelling", time.Now()
+	cancel := record.cancel
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
+	if cancel != nil {
+		cancel()
+	}
+	return nil
+}
+
+func (s *jobStore) retry(id string) (pipeline.Project, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.items[id]
+	if !ok {
+		return pipeline.Project{}, "", os.ErrNotExist
+	}
+	if record.Job.Status != "failed" && record.Job.Status != "cancelled" {
+		return pipeline.Project{}, "", errors.New("إعادة المحاولة متاحة للمهام الفاشلة أو الملغاة فقط")
+	}
+	for _, scene := range record.Project.Scenes {
+		if _, err := os.Stat(scene.Image); err != nil {
+			return pipeline.Project{}, "", errors.New("ملفات المهمة الأصلية غير متاحة")
+		}
+	}
+	record.Job.Status, record.Job.Error, record.Job.OutputURL, record.Job.SRTURL = "queued", "", "", ""
+	record.Job.UpdatedAt = time.Now()
+	if err := s.persistLocked(); err != nil {
+		return pipeline.Project{}, "", err
+	}
+	return record.Project, record.UploadDir, nil
+}
+
+func (s *jobStore) resumable() []*jobRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*jobRecord, 0)
+	for _, record := range s.items {
+		if record.Job.Status == "cancelling" {
+			record.Job.Status, record.Job.Error, record.Job.UpdatedAt = "cancelled", "تم إلغاء المهمة", time.Now()
+			continue
+		}
+		if record.Job.Status == "queued" || record.Job.Status == "running" {
+			record.Job.Status, record.Job.Error, record.Job.UpdatedAt = "queued", "", time.Now()
+			copyRecord := *record
+			out = append(out, &copyRecord)
+		}
+	}
+	if len(out) > 0 {
+		if err := s.persistLocked(); err != nil {
+			log.Printf("persist resumed jobs: %v", err)
+		}
+	}
 	return out
 }
 
@@ -77,8 +214,12 @@ func main() {
 	mux.HandleFunc("/api/templates", handleTemplates)
 	mux.HandleFunc("/api/batch", handleBatch)
 	mux.HandleFunc("/api/jobs", handleJobs)
+	mux.HandleFunc("/api/jobs/", handleJobAction)
 	mux.Handle("/output/", http.StripPrefix("/output/", http.FileServer(http.Dir("output"))))
 	mux.Handle("/", http.FileServer(http.Dir(*web)))
+	for _, record := range jobs.resumable() {
+		go runJob(record.Job.ID, record.Project)
+	}
 	log.Printf("Omran Video Studio: http://localhost:%s", *port)
 	log.Fatal(http.ListenAndServe(":"+*port, headers(mux)))
 }
@@ -194,15 +335,16 @@ func handleBatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "عدد المشاهد من 1 إلى 20", 400)
 		return
 	}
-	dir, err := os.MkdirTemp("tmp", "batch-")
-	if err != nil {
+	id := strconv.FormatInt(time.Now().UnixNano(), 36)
+	dir := filepath.Join("data", "jobs", id, "inputs")
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		http.Error(w, "تعذر تجهيز الدفعة", 500)
 		return
 	}
 	cleanup := true
 	defer func() {
 		if cleanup {
-			os.RemoveAll(dir)
+			os.RemoveAll(filepath.Dir(dir))
 		}
 	}()
 	audio, err := saveUpload(r, "audio", dir, false, ".wav", ".mp3", ".m4a", ".aac")
@@ -224,7 +366,6 @@ func handleBatch(w http.ResponseWriter, r *http.Request) {
 		}
 		scenes = append(scenes, pipeline.Scene{Image: image, Seconds: item.Seconds, Caption: item.Caption})
 	}
-	id := strconv.FormatInt(time.Now().UnixNano(), 36)
 	output := filepath.Join("output", "batch-"+id+".mp4")
 	project := pipeline.Project{Name: strings.TrimSpace(in.Name), Template: in.Template, Audio: audio, Watermark: watermark, Output: output, Scenes: scenes}
 	if project.Name == "" {
@@ -235,21 +376,38 @@ func handleBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	j := job{ID: id, Name: project.Name, Status: "queued", CreatedAt: now, UpdatedAt: now}
-	jobs.put(j)
+	record := &jobRecord{Job: job{ID: id, Name: project.Name, Status: "queued", CreatedAt: now, UpdatedAt: now}, Project: project, UploadDir: filepath.Dir(dir)}
+	if err := jobs.put(record); err != nil {
+		http.Error(w, "تعذر حفظ المهمة", 500)
+		return
+	}
 	cleanup = false
-	go runJob(j.ID, dir, project)
-	writeJSON(w, http.StatusAccepted, j)
+	go runJob(id, project)
+	writeJSON(w, http.StatusAccepted, record.Job)
 }
 
-func runJob(id, uploadDir string, project pipeline.Project) {
-	defer os.RemoveAll(uploadDir)
-	renderSlot <- struct{}{}
-	defer func() { <-renderSlot }()
-	jobs.update(id, "running", "", "", "")
+func runJob(id string, project pipeline.Project) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	jobs.setCancel(id, cancel)
 	defer cancel()
+	defer jobs.clearCancel(id)
+	select {
+	case renderSlot <- struct{}{}:
+		defer func() { <-renderSlot }()
+	case <-ctx.Done():
+		jobs.update(id, "cancelled", "", "", "تم إلغاء المهمة")
+		return
+	}
+	if ctx.Err() != nil {
+		jobs.update(id, "cancelled", "", "", "تم إلغاء المهمة")
+		return
+	}
+	jobs.update(id, "running", "", "", "")
 	if err := pipeline.Run(ctx, project); err != nil {
+		if ctx.Err() != nil {
+			jobs.update(id, "cancelled", "", "", "تم إلغاء المهمة")
+			return
+		}
 		log.Printf("batch %s failed: %v", id, err)
 		jobs.update(id, "failed", "", "", "تعذر تصدير الفيديو")
 		return
@@ -269,6 +427,45 @@ func handleJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, jobs.list())
+}
+
+func handleJobAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/jobs/"), "/"), "/")
+	if len(parts) != 2 || parts[0] == "" {
+		http.Error(w, "مسار غير صالح", 404)
+		return
+	}
+	id, action := parts[0], parts[1]
+	switch action {
+	case "cancel":
+		if err := jobs.cancelJob(id); err != nil {
+			jobActionError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "cancelling"})
+	case "retry":
+		project, _, err := jobs.retry(id)
+		if err != nil {
+			jobActionError(w, err)
+			return
+		}
+		go runJob(id, project)
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
+	default:
+		http.Error(w, "إجراء غير معروف", 404)
+	}
+}
+
+func jobActionError(w http.ResponseWriter, err error) {
+	if errors.Is(err, os.ErrNotExist) {
+		http.Error(w, "المهمة غير موجودة", 404)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusConflict)
 }
 
 func saveUpload(r *http.Request, field, dir string, required bool, allowed ...string) (string, error) {
